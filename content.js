@@ -27,7 +27,7 @@ const SKIP = new Set([
 
 const FOLLOWS_YOU = /follows you|关注了你|已关注你|已關注你|フォローされています|folgt dir|vous suit|te sigue|나를 팔로우/i;
 const NOT_BLUE = /government|政府|官方|组织认证|企業|business|gold verified|gray|grey|government organization|official/i;
-const DAY_OPTIONS = [3, 5, 7];
+const DAY_OPTIONS = [0, 3, 5, 7];
 
 let running = false;
 let stopFlag = false;
@@ -169,13 +169,15 @@ async function scanFollowing() {
   renderList(shown);
   persistFollowTimes();
   setStatus(
-    tt(stopFlag ? "stopped" : "done", {
-      blue: seen.size,
-      missing: missing.length,
-      shown: shown.length,
-      young: missing.length - shown.length,
-      min: minDays,
-    })
+    tt(
+      stopFlag ? "stopped" : "done",
+      statusVars({
+        blue: seen.size,
+        missing: missing.length,
+        shown: shown.length,
+        young: missing.length - shown.length,
+      })
+    )
   );
 }
 
@@ -319,8 +321,24 @@ function missingFrom(seen) {
     .sort((a, b) => daysFollowed(b) - daysFollowed(a) || a.handle.localeCompare(b.handle));
 }
 
+function isRealtime() {
+  return minDays === 0;
+}
+
 function dueFrom(missing, days = minDays) {
+  if (days === 0) return missing;
   return missing.filter((user) => isOverDays(user, days));
+}
+
+function statusVars(extra = {}) {
+  return {
+    blue: extra.blue ?? 0,
+    missing: extra.missing ?? 0,
+    shown: extra.shown ?? 0,
+    young: extra.young ?? 0,
+    min: minDays,
+    mode: isRealtime() ? tt("days0") : tt(`days${minDays}`),
+  };
 }
 
 function showPanel() {
@@ -341,6 +359,7 @@ function showPanel() {
       </div>
     </header>
     <div class="filters"></div>
+    <p class="warn"></p>
     <p class="status"></p>
     <ol class="list"></ol>
   `;
@@ -362,7 +381,8 @@ function showPanel() {
   ].join(";");
   panel.querySelector("header").style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;";
   panel.querySelector(".actions").style.cssText = "display:flex;gap:6px;";
-  panel.querySelector(".filters").style.cssText = "display:flex;gap:6px;margin:0 0 8px;";
+  panel.querySelector(".filters").style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;";
+  panel.querySelector(".warn").style.cssText = "margin:0 0 8px;color:#ff4d4f;font-weight:650;";
   for (const button of panel.querySelectorAll("button")) {
     styleChip(button, false);
   }
@@ -384,7 +404,9 @@ function refreshPanelChrome() {
   const panel = document.getElementById(PANEL_ID);
   if (!panel) return;
   const title = panel.querySelector("[data-role='title']");
-  if (title) title.textContent = tt("panelTitle", { min: minDays });
+  if (title) title.textContent = isRealtime() ? tt("panelTitleLive") : tt("panelTitle", { min: minDays });
+  const warn = panel.querySelector(".warn");
+  if (warn) warn.textContent = tt("liveWarn");
   const copy = panel.querySelector("[data-act='copy']");
   const stop = panel.querySelector("[data-act='stop']");
   const close = panel.querySelector("[data-act='close']");
@@ -427,7 +449,7 @@ function onPanelClick(event) {
     const shown = dueFrom(lastMissing);
     renderList(shown);
     refreshPanelChrome();
-    setStatus(tt("filtered", { missing: lastMissing.length, shown: shown.length, young: lastMissing.length - shown.length, min: minDays }));
+    setStatus(tt("filtered", statusVars({ missing: lastMissing.length, shown: shown.length, young: lastMissing.length - shown.length })));
   }
   if (act === "copy") {
     const lines = [...document.querySelectorAll(`#${PANEL_ID} .list a`)].map(
@@ -450,7 +472,17 @@ function updateProgress(seen) {
   const missing = missingFrom(seen);
   lastMissing = missing;
   const shown = dueFrom(missing);
-  setStatus(tt("progress", { blue: seen.size, missing: missing.length, shown: shown.length, young: missing.length - shown.length, min: minDays }));
+  setStatus(
+    tt(
+      "progress",
+      statusVars({
+        blue: seen.size,
+        missing: missing.length,
+        shown: shown.length,
+        young: missing.length - shown.length,
+      })
+    )
+  );
   renderList(shown);
 }
 

@@ -1,6 +1,7 @@
 const status = document.getElementById("status");
 const uiLangEl = document.getElementById("uiLang");
 const minDaysEl = document.getElementById("minDays");
+const DAY_OPTIONS = [0, 3, 5, 7];
 let uiLang = "auto";
 let minDays = 3;
 
@@ -8,6 +9,7 @@ function applyUi() {
   document.getElementById("appName").textContent = t(uiLang, "appName");
   document.getElementById("labelUiLang").textContent = t(uiLang, "labelUiLang");
   document.getElementById("labelMinDays").textContent = t(uiLang, "labelMinDays");
+  document.getElementById("liveWarn").textContent = t(uiLang, "liveWarn");
   document.getElementById("popupDesc").textContent = t(uiLang, "popupDesc");
   document.getElementById("start").textContent = t(uiLang, "start");
   document.getElementById("hint").textContent = t(uiLang, "hint");
@@ -33,9 +35,14 @@ function fillDays() {
   minDaysEl.value = String(minDays);
 }
 
+function readDays(value) {
+  const next = Number(value);
+  return DAY_OPTIONS.includes(next) ? next : 3;
+}
+
 chrome.storage.local.get({ uiLang: "auto", minDays: 3 }).then((stored) => {
   uiLang = stored.uiLang || "auto";
-  minDays = [3, 5, 7].includes(Number(stored.minDays)) ? Number(stored.minDays) : 3;
+  minDays = readDays(stored.minDays);
   applyUi();
 });
 
@@ -46,7 +53,7 @@ uiLangEl.addEventListener("change", async () => {
 });
 
 minDaysEl.addEventListener("change", async () => {
-  minDays = Number(minDaysEl.value) || 3;
+  minDays = readDays(minDaysEl.value);
   await chrome.storage.local.set({ minDays });
 });
 
@@ -57,6 +64,7 @@ document.getElementById("start").addEventListener("click", async () => {
     return;
   }
   try {
+    minDays = readDays(minDaysEl.value);
     await chrome.storage.local.set({ minDays, pendingScan: true });
     try {
       await chrome.tabs.reload(tab.id);

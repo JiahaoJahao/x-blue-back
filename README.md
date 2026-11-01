@@ -4,7 +4,11 @@
 
 <h1 align="center">蓝V回关检查</h1>
 
-<p align="center">看你在 X（Twitter）上关注超过 3 天、5 天或 7 天、还没回关你的蓝 V</p>
+<p align="center">看你在 X（Twitter）上还没回关你的蓝 V：实时，或超过 3 天 / 5 天 / 7 天</p>
+
+<p>
+  <b><font color="#ff0000">不建议使用「实时」。别人回关也需要时间，刚关注就检查，很容易把还来不及回关的人算进去。请优先使用超过 3 天、5 天或 7 天。</font></b>
+</p>
 
 你**不需要会 GitHub**，也不需要会写代码。  
 只要会用 Chrome 或 Edge，按下面一步一步做就行。
@@ -98,15 +102,20 @@
 2. 确认当前这个标签页就是 X，不要跑到别的网站再点开始。
 3. 点浏览器右上角的插件图标。
 4. 需要的话，先选语言，再选要看的是：
-   - **超过 3 天**
-   - **超过 5 天**
-   - **超过 7 天**
+   - **超过 3 天**（建议）
+   - **超过 5 天**（建议）
+   - **超过 7 天**（建议）
+   - **实时**（会列出当前所有未回关的蓝 V）
 5. 点 **开始检查**。
 6. 插件会先刷新当前 X 页面，再打开你的「正在关注 / Following」，并自动往下滚。
 7. **请停在这个标签页**，不要切走，不要关。关注很多时，可能要滚几分钟。
-8. 滚完后，右上角面板会列出：你已经关注超过所选天数、对方还没回关的蓝 V。
-9. 面板上方可以随时切换超过 3 天 / 5 天 / 7 天。
+8. 滚完后，右上角面板会列出对应范围里、对方还没回关的蓝 V。
+9. 面板上方可以随时切换实时 / 超过 3 天 / 5 天 / 7 天。
 10. 可以点 **复制** 把名单拷出来。每个人旁边有 **取关**，点谁才取关谁。
+
+<p>
+  <b><font color="#ff0000">再次提醒：不建议使用「实时」。别人回关也需要时间。刚关注就按实时名单取关，很容易误伤。</font></b>
+</p>
 
 如果点取关时提示「页面上暂时看不到」这个人：先在关注列表里用手往下滚，滚到能看见他，再点取关。  
 X 的列表是「虚拟滚动」，滚走了，页面上就没有那一行。
@@ -118,7 +127,7 @@ X 的列表是「虚拟滚动」，滚走了，页面上就没有那一行。
 - 只看带蓝 V（X Premium）的账号
 - 看对方有没有「关注了你 / Follows you」
 - 算出你关注这个人几天了
-- 只列出 **超过 3 / 5 / 7 天还没回关** 的蓝 V
+- 可看 **实时** 全部未回关蓝 V，或只看 **超过 3 / 5 / 7 天还没回关** 的蓝 V
 
 金 V、灰 V（企业 / 政府）会尽量排除。
 
@@ -170,7 +179,11 @@ You do **not** need a GitHub account.
 2. Unzip the file. Open the folder named `x-blue-back-master`. You should see `manifest.json` inside it.
 3. Chrome: open `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → select that folder.
 4. Edge: open `edge://extensions` → turn on **Developer mode** → **Load unpacked** → select that folder.
-5. Pin the extension, sign in to [x.com](https://x.com), click the icon, choose more than 3 / 5 / 7 days, then **Start scan**. Stay on that tab.
+5. Pin the extension, sign in to [x.com](https://x.com), click the icon, choose Live or more than 3 / 5 / 7 days, then **Start scan**. Stay on that tab.
+
+<p>
+  <b><font color="#ff0000">Live is not recommended. People need time to follow back.</font></b>
+</p>
 
 Do not load the `.zip` file itself. Load the unzipped folder.
 

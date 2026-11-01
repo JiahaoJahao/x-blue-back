@@ -50,6 +50,12 @@ button {
   color: #fff;
 }
 
+.warn {
+  color: #ff4d4f;
+  font-weight: 650;
+  font-size: 12px;
+}
+
 .hint {
   margin-top: 12px;
   font-size: 12px;

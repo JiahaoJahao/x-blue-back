@@ -27,36 +27,69 @@ const SKIP = new Set([
 
 const FOLLOWS_YOU = /follows you|关注了你|已关注你|已關注你|フォローされています|folgt dir|vous suit|te sigue|나를 팔로우/i;
 const NOT_BLUE = /government|政府|官方|组织认证|企業|business|gold verified|gray|grey|government organization|official/i;
+const DAY_OPTIONS = [3, 5, 7];
 
 let running = false;
 let stopFlag = false;
 let currentMissing = [];
+let lastMissing = [];
 let unfollowing = false;
 let uiLang = "auto";
+let minDays = 3;
+let followTimes = {};
+let gqlUsers = new Map();
 
 try {
-  chrome.storage.local.get({ uiLang: "auto" }).then((stored) => {
+  chrome.storage.local.get({ uiLang: "auto", minDays: 3, followTimes: {} }).then((stored) => {
     uiLang = stored.uiLang || "auto";
+    followTimes = stored.followTimes || {};
+    const saved = Number(sessionStorage.getItem("blueback-days") || stored.minDays);
+    if (DAY_OPTIONS.includes(saved)) minDays = saved;
+    refreshPanelChrome();
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.uiLang) {
+    if (area !== "local") return;
+    if (changes.uiLang) {
       uiLang = changes.uiLang.newValue || "auto";
       refreshPanelChrome();
+    }
+    if (changes.minDays && DAY_OPTIONS.includes(Number(changes.minDays.newValue))) {
+      minDays = Number(changes.minDays.newValue);
+      refreshPanelChrome();
+      renderFromCache();
     }
   });
 } catch {
   /* ignore */
 }
 
+window.addEventListener("message", (event) => {
+  if (event.source !== window) return;
+  if (!event.data?.__blueback || !Array.isArray(event.data.users)) return;
+  mergeGraphql(event.data.users);
+});
+
 function tt(key, vars) {
   return t(uiLang, key, vars);
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "BLUEBACK_START") void start();
+  if (message?.type !== "BLUEBACK_START") return;
+  const next = Number(message.minDays);
+  if (DAY_OPTIONS.includes(next)) {
+    minDays = next;
+    sessionStorage.setItem("blueback-days", String(minDays));
+    try {
+      chrome.storage.local.set({ minDays });
+    } catch {
+      /* ignore */
+    }
+  }
+  void start({ fromFreshLoad: false });
 });
 
-async function start() {
+async function start(options = {}) {
+  const fromFreshLoad = !!options.fromFreshLoad;
   if (running) {
     showPanel();
     setStatus(tt("alreadyRunning"));
@@ -65,7 +98,7 @@ async function start() {
   running = true;
   stopFlag = false;
   showPanel();
-    setStatus(tt("openingList"));
+  setStatus(tt("openingList"));
   renderList([]);
 
   try {
@@ -73,9 +106,17 @@ async function start() {
       const profile = myProfilePath();
       if (!profile) throw new Error(tt("noProfile"));
       sessionStorage.setItem("blueback-run", "1");
+      sessionStorage.setItem("blueback-days", String(minDays));
       location.assign(`${profile}/following`);
       return;
     }
+    if (!fromFreshLoad) {
+      sessionStorage.setItem("blueback-run", "1");
+      sessionStorage.setItem("blueback-days", String(minDays));
+      location.reload();
+      return;
+    }
+    await waitForList();
     await scanFollowing();
   } catch (err) {
     setStatus(String(err?.message || err));
@@ -122,12 +163,19 @@ async function scanFollowing() {
     lastHeight = height;
   }
 
-  const missing = [...seen.values()].filter((user) => !user.followsYou).sort((a, b) => a.handle.localeCompare(b.handle));
-  renderList(missing);
+  const missing = missingFrom(seen);
+  lastMissing = missing;
+  const shown = dueFrom(missing);
+  renderList(shown);
+  persistFollowTimes();
   setStatus(
-    stopFlag
-      ? tt("stopped", { blue: seen.size, missing: missing.length })
-      : tt("done", { blue: seen.size, missing: missing.length })
+    tt(stopFlag ? "stopped" : "done", {
+      blue: seen.size,
+      missing: missing.length,
+      shown: shown.length,
+      young: missing.length - shown.length,
+      min: minDays,
+    })
   );
 }
 
@@ -135,23 +183,89 @@ function harvest(seen) {
   for (const cell of document.querySelectorAll('[data-testid="UserCell"]')) {
     const user = parseCell(cell);
     if (!user || !user.blue) continue;
-    const prev = seen.get(user.handle);
-    if (prev) prev.followsYou = prev.followsYou || user.followsYou;
-    else seen.set(user.handle, user);
+    rememberUser(seen, user);
+  }
+  for (const user of gqlUsers.values()) {
+    if (!user.blue) continue;
+    rememberUser(seen, user);
+  }
+}
+
+function rememberUser(seen, user) {
+  const key = user.handle.toLowerCase();
+  const prev = seen.get(key);
+  const followedAt = user.followedAt || prev?.followedAt || followTimes[key] || 0;
+  if (followedAt) followTimes[key] = followedAt;
+  else if (!followTimes[key]) followTimes[key] = Date.now();
+  seen.set(key, {
+    handle: user.handle,
+    name: user.name || prev?.name || user.handle,
+    blue: true,
+    followsYou: !!(prev?.followsYou || user.followsYou),
+    followedAt: followTimes[key],
+  });
+}
+
+function mergeGraphql(users) {
+  let changed = false;
+  for (const user of users) {
+    if (!user?.handle) continue;
+    const key = user.handle.toLowerCase();
+    const prev = gqlUsers.get(key);
+    const followedAt = user.followedAt || prev?.followedAt || 0;
+    gqlUsers.set(key, {
+      handle: user.handle,
+      name: user.name || prev?.name || user.handle,
+      blue: !!(user.blue || prev?.blue),
+      followsYou: !!(user.followsYou || prev?.followsYou),
+      followedAt,
+    });
+    if (followedAt && followTimes[key] !== followedAt) {
+      followTimes[key] = followedAt;
+      changed = true;
+    }
+  }
+  if (changed) persistFollowTimes();
+  if (!lastMissing.length) return;
+  lastMissing = lastMissing
+    .map((user) => {
+      const key = user.handle.toLowerCase();
+      const gql = gqlUsers.get(key);
+      return {
+        ...user,
+        followsYou: !!(user.followsYou || gql?.followsYou),
+        followedAt: gql?.followedAt || followTimes[key] || user.followedAt,
+      };
+    })
+    .filter((user) => user.blue && !user.followsYou)
+    .sort((a, b) => daysFollowed(b) - daysFollowed(a) || a.handle.localeCompare(b.handle));
+  const shown = dueFrom(lastMissing);
+  renderList(shown);
+}
+
+function persistFollowTimes() {
+  try {
+    chrome.storage.local.set({ followTimes });
+  } catch {
+    /* ignore */
   }
 }
 
 function parseCell(cell) {
   const handle = readHandle(cell);
   if (!handle) return null;
+  const key = handle.toLowerCase();
+  const gql = gqlUsers.get(key);
   const name =
     cell.querySelector('[data-testid="User-Name"] span')?.textContent?.trim() ||
+    gql?.name ||
     handle;
   return {
     handle,
     name,
-    blue: isBlueVerified(cell),
-    followsYou: followsYou(cell),
+    blue: isBlueVerified(cell) || !!gql?.blue,
+    followsYou: followsYou(cell) || !!gql?.followsYou,
+    followedAt: gql?.followedAt || followTimes[key] || 0,
   };
 }
 
@@ -183,9 +297,38 @@ function followsYou(cell) {
   return FOLLOWS_YOU.test(text);
 }
 
+function followedAtOf(user) {
+  return user.followedAt || followTimes[user.handle.toLowerCase()] || 0;
+}
+
+function daysFollowed(user) {
+  const ts = followedAtOf(user);
+  if (!ts) return 0;
+  return Math.max(0, Math.floor((Date.now() - ts) / 86400000));
+}
+
+function isOverDays(user, days) {
+  const ts = followedAtOf(user);
+  if (!ts) return false;
+  return Date.now() - ts > days * 86400000;
+}
+
+function missingFrom(seen) {
+  return [...seen.values()]
+    .filter((user) => user.blue && !user.followsYou)
+    .sort((a, b) => daysFollowed(b) - daysFollowed(a) || a.handle.localeCompare(b.handle));
+}
+
+function dueFrom(missing, days = minDays) {
+  return missing.filter((user) => isOverDays(user, days));
+}
+
 function showPanel() {
   let panel = document.getElementById(PANEL_ID);
-  if (panel) return panel;
+  if (panel) {
+    refreshPanelChrome();
+    return panel;
+  }
   panel = document.createElement("aside");
   panel.id = PANEL_ID;
   panel.innerHTML = `
@@ -197,6 +340,7 @@ function showPanel() {
         <button type="button" data-act="close"></button>
       </div>
     </header>
+    <div class="filters"></div>
     <p class="status"></p>
     <ol class="list"></ol>
   `;
@@ -205,7 +349,7 @@ function showPanel() {
     "z-index:2147483647",
     "top:16px",
     "right:16px",
-    "width:min(360px, calc(100vw - 32px))",
+    "width:min(380px, calc(100vw - 32px))",
     "max-height:min(70vh, 560px)",
     "overflow:auto",
     "background:#10141c",
@@ -218,9 +362,9 @@ function showPanel() {
   ].join(";");
   panel.querySelector("header").style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;";
   panel.querySelector(".actions").style.cssText = "display:flex;gap:6px;";
+  panel.querySelector(".filters").style.cssText = "display:flex;gap:6px;margin:0 0 8px;";
   for (const button of panel.querySelectorAll("button")) {
-    button.style.cssText =
-      "border:1px solid #2a3346;background:#171d2a;color:#f4f1ea;border-radius:999px;padding:4px 8px;cursor:pointer;";
+    styleChip(button, false);
   }
   panel.querySelector(".status").style.cssText = "margin:0 0 8px;color:#9aa3b5;";
   panel.querySelector(".list").style.cssText = "margin:0;padding-left:18px;max-height:420px;overflow:auto;";
@@ -230,17 +374,36 @@ function showPanel() {
   return panel;
 }
 
+function styleChip(button, active) {
+  button.style.cssText = active
+    ? "border:1px solid #1d9bf0;background:#1d9bf0;color:#fff;border-radius:999px;padding:4px 8px;cursor:pointer;"
+    : "border:1px solid #2a3346;background:#171d2a;color:#f4f1ea;border-radius:999px;padding:4px 8px;cursor:pointer;";
+}
+
 function refreshPanelChrome() {
   const panel = document.getElementById(PANEL_ID);
   if (!panel) return;
   const title = panel.querySelector("[data-role='title']");
-  if (title) title.textContent = tt("panelTitle");
+  if (title) title.textContent = tt("panelTitle", { min: minDays });
   const copy = panel.querySelector("[data-act='copy']");
   const stop = panel.querySelector("[data-act='stop']");
   const close = panel.querySelector("[data-act='close']");
   if (copy) copy.textContent = tt("copy");
   if (stop) stop.textContent = tt("stop");
   if (close) close.textContent = tt("close");
+  const filters = panel.querySelector(".filters");
+  if (filters) {
+    filters.replaceChildren();
+    for (const days of DAY_OPTIONS) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.act = "days";
+      button.dataset.days = String(days);
+      button.textContent = tt(`days${days}`);
+      styleChip(button, days === minDays);
+      filters.appendChild(button);
+    }
+  }
   if (panel.querySelector(".status") && !panel.querySelector(".status").textContent) {
     panel.querySelector(".status").textContent = tt("preparing");
   }
@@ -251,8 +414,25 @@ function onPanelClick(event) {
   const act = event.target?.dataset?.act;
   if (act === "close") document.getElementById(PANEL_ID)?.remove();
   if (act === "stop") stopFlag = true;
+  if (act === "days") {
+    const next = Number(event.target.dataset.days);
+    if (!DAY_OPTIONS.includes(next)) return;
+    minDays = next;
+    sessionStorage.setItem("blueback-days", String(minDays));
+    try {
+      chrome.storage.local.set({ minDays });
+    } catch {
+      /* ignore */
+    }
+    const shown = dueFrom(lastMissing);
+    renderList(shown);
+    refreshPanelChrome();
+    setStatus(tt("filtered", { missing: lastMissing.length, shown: shown.length, young: lastMissing.length - shown.length, min: minDays }));
+  }
   if (act === "copy") {
-    const lines = [...document.querySelectorAll(`#${PANEL_ID} .list a`)].map((a) => `@${a.dataset.handle} ${a.dataset.name}`);
+    const lines = [...document.querySelectorAll(`#${PANEL_ID} .list a`)].map(
+      (a) => `@${a.dataset.handle} ${a.dataset.name} ${a.dataset.days}d`
+    );
     navigator.clipboard.writeText(lines.join("\n")).then(() => setStatus(tt("copied", { count: lines.length })));
   }
   if (act === "unfollow" && event.target.dataset.handle) {
@@ -266,9 +446,17 @@ function setStatus(text) {
 }
 
 function updateProgress(seen) {
-  const missing = [...seen.values()].filter((user) => !user.followsYou).length;
-  setStatus(tt("progress", { blue: seen.size, missing }));
-  renderList([...seen.values()].filter((user) => !user.followsYou));
+  persistFollowTimes();
+  const missing = missingFrom(seen);
+  lastMissing = missing;
+  const shown = dueFrom(missing);
+  setStatus(tt("progress", { blue: seen.size, missing: missing.length, shown: shown.length, young: missing.length - shown.length, min: minDays }));
+  renderList(shown);
+}
+
+function renderFromCache() {
+  const shown = dueFrom(lastMissing);
+  renderList(shown);
 }
 
 function renderList(users) {
@@ -277,6 +465,7 @@ function renderList(users) {
   if (!list) return;
   list.replaceChildren();
   for (const user of users) {
+    const days = daysFollowed(user);
     const item = document.createElement("li");
     item.style.cssText = "margin:0 0 8px;display:flex;gap:8px;align-items:center;justify-content:space-between;";
     const link = document.createElement("a");
@@ -285,8 +474,12 @@ function renderList(users) {
     link.rel = "noreferrer";
     link.dataset.handle = user.handle;
     link.dataset.name = user.name;
+    link.dataset.days = String(days);
     link.textContent = `${user.name} @${user.handle}`;
     link.style.cssText = "color:#1d9bf0;flex:1;min-width:0;";
+    const meta = document.createElement("span");
+    meta.textContent = tt("dayCount", { days });
+    meta.style.cssText = "color:#9aa3b5;font-size:12px;flex:none;";
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.act = "unfollow";
@@ -294,7 +487,11 @@ function renderList(users) {
     button.textContent = tt("unfollow");
     button.style.cssText =
       "border:1px solid #2a3346;background:#171d2a;color:#f4f1ea;border-radius:999px;padding:4px 8px;cursor:pointer;flex:none;";
-    item.appendChild(link);
+    const left = document.createElement("div");
+    left.style.cssText = "flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;";
+    left.appendChild(link);
+    left.appendChild(meta);
+    item.appendChild(left);
     item.appendChild(button);
     list.appendChild(item);
   }
@@ -331,7 +528,11 @@ async function unfollowOne(handle) {
     button.click();
     await wait(350);
     document.querySelector('[data-testid="confirmationSheetConfirm"]')?.click();
-    currentMissing = currentMissing.filter((user) => user.handle.toLowerCase() !== handle.toLowerCase());
+    const key = handle.toLowerCase();
+    lastMissing = lastMissing.filter((user) => user.handle.toLowerCase() !== key);
+    currentMissing = currentMissing.filter((user) => user.handle.toLowerCase() !== key);
+    delete followTimes[key];
+    persistFollowTimes();
     renderList(currentMissing);
     setStatus(tt("unfollowed", { handle, left: currentMissing.length }));
   } finally {
@@ -343,7 +544,33 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-if (sessionStorage.getItem("blueback-run") === "1" && onFollowingPage()) {
-  sessionStorage.removeItem("blueback-run");
-  window.setTimeout(() => void start(), 1200);
+async function waitForList() {
+  setStatus(tt("openingList"));
+  for (let i = 0; i < 25; i += 1) {
+    if (document.querySelector('[data-testid="UserCell"]')) {
+      await wait(400);
+      return;
+    }
+    await wait(250);
+  }
 }
+
+async function maybeAutostart() {
+  let shouldStart = sessionStorage.getItem("blueback-run") === "1";
+  sessionStorage.removeItem("blueback-run");
+  try {
+    const stored = await chrome.storage.local.get({ pendingScan: false, minDays: 3 });
+    if (stored.pendingScan) {
+      shouldStart = true;
+      await chrome.storage.local.set({ pendingScan: false });
+    }
+    const saved = Number(sessionStorage.getItem("blueback-days") || stored.minDays);
+    if (DAY_OPTIONS.includes(saved)) minDays = saved;
+  } catch {
+    /* ignore */
+  }
+  if (!shouldStart) return;
+  window.setTimeout(() => void start({ fromFreshLoad: onFollowingPage() }), 800);
+}
+
+void maybeAutostart();

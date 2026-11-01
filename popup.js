@@ -1,14 +1,18 @@
 const status = document.getElementById("status");
 const uiLangEl = document.getElementById("uiLang");
+const minDaysEl = document.getElementById("minDays");
 let uiLang = "auto";
+let minDays = 3;
 
 function applyUi() {
   document.getElementById("appName").textContent = t(uiLang, "appName");
   document.getElementById("labelUiLang").textContent = t(uiLang, "labelUiLang");
+  document.getElementById("labelMinDays").textContent = t(uiLang, "labelMinDays");
   document.getElementById("popupDesc").textContent = t(uiLang, "popupDesc");
   document.getElementById("start").textContent = t(uiLang, "start");
   document.getElementById("hint").textContent = t(uiLang, "hint");
   fillLangs();
+  fillDays();
 }
 
 function fillLangs() {
@@ -22,8 +26,16 @@ function fillLangs() {
   uiLangEl.value = uiLang;
 }
 
-chrome.storage.local.get({ uiLang: "auto" }).then((stored) => {
+function fillDays() {
+  for (const option of minDaysEl.options) {
+    option.textContent = t(uiLang, `days${option.value}`);
+  }
+  minDaysEl.value = String(minDays);
+}
+
+chrome.storage.local.get({ uiLang: "auto", minDays: 3 }).then((stored) => {
   uiLang = stored.uiLang || "auto";
+  minDays = [3, 5, 7].includes(Number(stored.minDays)) ? Number(stored.minDays) : 3;
   applyUi();
 });
 
@@ -33,6 +45,11 @@ uiLangEl.addEventListener("change", async () => {
   applyUi();
 });
 
+minDaysEl.addEventListener("change", async () => {
+  minDays = Number(minDaysEl.value) || 3;
+  await chrome.storage.local.set({ minDays });
+});
+
 document.getElementById("start").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !isX(tab.url)) {
@@ -40,7 +57,12 @@ document.getElementById("start").addEventListener("click", async () => {
     return;
   }
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: "BLUEBACK_START" });
+    await chrome.storage.local.set({ minDays, pendingScan: true });
+    try {
+      await chrome.tabs.reload(tab.id);
+    } catch {
+      await chrome.tabs.sendMessage(tab.id, { type: "BLUEBACK_START", minDays });
+    }
     window.close();
   } catch {
     status.textContent = t(uiLang, "notReady");
